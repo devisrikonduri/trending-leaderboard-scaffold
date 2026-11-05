@@ -21,7 +21,7 @@ const redis = new Redis(process.env.REDIS_URL);
 export async function upvote(postId) {
   // TODO: ZINCRBY trending:posts by 1 for `postId` and return the new score.
   //       ioredis: redis.zincrby(key, increment, member)
-  throw new Error("upvote() not implemented");
+    return redis.zincrby("trending:posts", 1, postId);
 }
 
 /**
@@ -32,12 +32,24 @@ export async function upvote(postId) {
  * @returns {Promise<Array<{ id: string, score: number, title?: string, author?: string }>>}
  */
 export async function getTop(n) {
-  // TODO:
-  // 1. redis.zrevrange("trending:posts", 0, n - 1, "WITHSCORES")  -> flat [id, score, id, score, ...]
-  // 2. Build rows [{ id, score }] AND queue one pipeline.hgetall(id + ":meta") per id.
-  // 3. await pipeline.exec()  -> results[k] is [error, value] for the k-th queued command.
-  // 4. Merge: return rows.map((row, k) => ({ ...row, ...results[k][1] })).
-  throw new Error("getTop() not implemented");
+  // 1 round trip: ids + scores, highest first
+  const flat = await redis.zrevrange("trending:posts", 0, n - 1, "WITHSCORES");
+
+  // 2. Pair up [id, score, id, score, ...] and queue one HGETALL per id
+  const rows = [];
+  const pipeline = redis.pipeline();
+  for (let i = 0; i < flat.length; i += 2) {
+    const id = flat[i];
+    rows.push({ id, score: Number(flat[i + 1]) });
+    pipeline.hgetall(id + ":meta");
+  }
+
+  // 3. One round trip for all the metadata
+  const results = await pipeline.exec(); // results[k] = [error, value]
+
+  // 4. Merge each row with its metadata
+  return rows.map((row, k) => ({ ...row, ...results[k][1] }));
+  
 }
 
 export { redis };
